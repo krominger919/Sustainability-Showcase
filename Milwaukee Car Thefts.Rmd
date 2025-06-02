@@ -1,0 +1,381 @@
+---
+title: "Rominger_DSC640_Week5-6Code"
+author: "Kathryn Rominger"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(tidyr)
+library(dplyr)
+library(stringr)
+library(lubridate)
+library(ggplot2)
+
+file_path1 <- "C:/Users/kromi/OneDrive/Bellevue/Data Presentation and Visualizations/Datasets/Car Thefts/Motherboard VICE News Kia Hyundai Theft Data.xlsx"
+data1 <- read_excel(file_path1, sheet = "Data", col_names = FALSE)
+
+file_path2 <- "C:/Users/kromi/OneDrive/Bellevue/Data Presentation and Visualizations/Datasets/Car Thefts/carTheftsMap.csv"
+data2 <- read.csv(file_path2)
+
+file_path3 <- "C:/Users/kromi/OneDrive/Bellevue/Data Presentation and Visualizations/Datasets/Car Thefts/KiaHyundaiMilwaukeeData.csv"
+MilwaukeeData <- read.csv(file_path3)
+
+file_path4 <- "C:/Users/kromi/OneDrive/Bellevue/Data Presentation and Visualizations/Datasets/Car Thefts/kiaHyundaiThefts.csv"
+data3 <- read.csv(file_path4)
+```
+
+# Data1 Manipulation
+```{r, include=TRUE, message=FALSE}
+# Extracting city names and sub-column headers.
+city_names <- as.character(data1[1, ])
+subgroups <- as.character(data1[2, ])
+
+#Filling NA values in city_names with the previous non-NA value.
+for (i in 2:length(city_names)) {
+  if (is.na(city_names[i])) {
+    city_names[i] <- city_names[i - 1]
+  }
+}
+
+#Combining city names with sub-columns to form new column names.
+new_column_names <- paste0(city_names, "_", subgroups)
+
+# Applying new column names.
+colnames(data1) <- new_column_names
+
+#Removing original city and subgroup rows.
+data1 <- data1[-c(1, 2), ]
+
+head(data1)
+
+# Converting first column to a date type.
+data1[[1]] <- as.Date(data1[[1]], format = "%y-%m-%d")
+
+# Reshaping the data to long format.
+data1 <- data1 %>%
+  pivot_longer(
+    cols = -1,
+    names_to = c("City", "Subgroup"),
+    names_sep = "_",
+    values_to = "Value"
+  )
+
+colnames(data1)[1] <- "Date"
+
+head(data1)
+
+#Mutating "Percent" values to be in a more readable form.
+data1 <- data1 %>%
+  mutate(
+    Value = as.numeric(Value)
+  )
+
+data1 <- data1 %>%
+  mutate(
+    Value = ifelse(Subgroup == "Percent" & !is.na(Value), round(Value * 100, 2), Value)
+  )
+
+# Removing state abbreviations from city names.
+data1$City <- gsub(",.*", "", data1$City)
+
+#Dropping missing values.
+data1 <- data1[!is.na(data1$Value), ]
+data1
+```
+
+# Data2 Manipulation
+```{r, include=TRUE, message=FALSE}
+head(data2)
+
+# Getting city name from geo_name.
+data2$geo_name <- gsub(" PD| SO", "", data2$geo_name)
+data2 <- data2 %>% filter(!grepl("Police|Dept", geo_name, ignore.case = TRUE))
+
+# Getting state abbreviations from agency_ori.
+data2$State <- ifelse(data2$agency_ori == "", NA, substr(data2$agency_ori, 1, 2))
+
+# Dropping rows with missing state data.
+data2 <- data2 %>% filter(!is.na(State))
+
+# Dropping unnecessary columns.
+data2 <- data2[, !colnames(data2) %in% c("latitude", "longitude", "agency_ori")]
+
+# Mutating percent change values to a more readable format.
+data2$percentChange2019to2022 <- data2$percentChange2019to2022 * 100
+head(data2)
+```
+
+# Data3 Manipulation
+```{r, include=TRUE, message=FALSE}
+head(data3)
+
+# Changing column names to facilitate merging.
+colnames(data3) <- str_to_title(colnames(data3))
+
+# Mutating percent values to a more readable format.
+data3$Percentkiahyundai <- data3$Percentkiahyundai * 100
+head(data3)
+```
+
+#Milwaukee Data Manipulation
+```{r, include=TRUE, message=FALSE}
+head(MilwaukeeData)
+
+# Removing and renaming columns.
+MilwaukeeData <- MilwaukeeData %>%
+  select(-city, -state) %>%
+  rename(
+    KiaHyundaiThefts = countKiaHyundaiThefts,
+    OtherThefts = countOtherThefts,
+    Percent = percentKiaHyundai
+  )
+
+# Combining date data.
+MilwaukeeData$Date <- as.Date(paste(MilwaukeeData$year, MilwaukeeData$month, 
+                                    "01", sep = "-"), format = "%Y-%b-%d")
+
+# Mutating percent values to a more readable format.
+MilwaukeeData$Percent <- MilwaukeeData$Percent * 100
+head(MilwaukeeData)
+```
+
+# Merging data sets.
+```{r, include=TRUE, message=FALSE}
+# Extracting month and year from Date column.
+data1 <- data1 %>%
+  mutate(Month = format(as.Date(Date), "%b"),
+         Year = year(as.Date(Date)))
+
+# Checking for missing cities.
+missing_cities <- data1 %>%
+  filter(!City %in% data3$City) %>%
+  select(Month, Year, City, Value, Subgroup)
+missing_cities
+
+# Creating new rows to add to data3.
+new_rows <- missing_cities %>%
+  pivot_wider(names_from = Subgroup, values_from = Value) %>%
+  mutate(
+    Countkiahyundaithefts = `Kia/Hyundais`,
+    Countotherthefts = `All` - `Kia/Hyundais`,
+    Percentkiahyundai = `Percent`
+  ) %>%
+  select(Month, Year, City, Countkiahyundaithefts, Countotherthefts, Percentkiahyundai)
+
+NationalData <- bind_rows(data3, new_rows)
+
+NationalData <- NationalData %>%
+  rename(
+    KiaHyundaiThefts = Countkiahyundaithefts,
+    OtherThefts = Countotherthefts,
+    PercentKiaHyundai = Percentkiahyundai
+  )
+
+# Filling in missing state data.
+na_states <- NationalData[is.na(NationalData$State), ]
+unique(na_states$City)
+
+# Create a named vector with city-state pairs
+city_state_mapping <- c(
+  "Washington DC" = "DC",
+  "Denver" = "CO",
+  "El Paso" = "TX",
+  "San Diego" = "CA",
+  "Sacramento" = "CA",
+  "Dallas" = "TX",
+  "Fort Worth" = "TX",
+  "Bakersfield" = "CA",
+  "Lubbock" = "TX",
+  "Fremont" = "CA",
+  "Irving" = "TX",
+  "Madison" = "WI",
+  "Frisco" = "TX",
+  "Lincoln" = "NE",
+  "Wichita" = "KS",
+  "Plano" = "TX",
+  "Akron" = "OH",
+  "Chula Vista" = "CA",
+  "Reno" = "NV",
+  "Oxnard" = "CA",
+  "San Francisco" = "CA",
+  "McKinney" = "TX",
+  "Arlington" = "TX",
+  "Garland" = "TX",
+  "Riverside County" = "CA",
+  "Stockton" = "CA",
+  "Corpus Christi" = "TX",
+  "Montgomery County" = "MD",
+  "San Bernardino" = "CA",
+  "Newport News" = "VA",
+  "Amarillo" = "TX",
+  "New Haven" = "CT",
+  "Washington" = "WA",
+  "Boise" = "ID",
+  "Austin" = "TX",
+  "Chandler" = "AZ",
+  "Modesto" = "CA",
+  "San Jose" = "CA",
+  "Aurora" = "CO",
+  "Raleigh" = "NC",
+  "St. Petersburg" = "FL",
+  "Milwaukee" = "WI",
+  "Los Angeles" = "CA",
+  "Glendale" = "CA",
+  "Orlando" = "FL",
+  "Eugene" = "OR",
+  "Durham" = "NC",
+  "Norfolk" = "VA",
+  "Pittsburgh" = "PA",
+  "Miami" = "FL",
+  "Spokane" = "WA",
+  "Salt Lake City" = "Utah",
+  "Minneapolis" = "MN",
+  "Anaheim" = "CA",
+  "Providence" = "RI",
+  "Syracuse" = "NY",
+  "Peoria" = "IL",
+  "Houston" = "TX",
+  "Prince George's County" = "MD",
+  "Cincinnati" = "OH",
+  "Vancouver" = "WA",
+  "VA Beach" = "VA",
+  "San Antonio" = "TX",
+  "Henderson" = "NV"
+)
+
+# Assigning states to the NationalData DataFrame
+NationalData$State <- city_state_mapping[NationalData$City]
+
+tail(NationalData)
+```
+
+# Graphs
+## Bar Chart
+```{r, include=TRUE, message=FALSE}
+# Calculating average percent change by state.
+avg_percent_change <- data2 %>%
+  group_by(State) %>%
+  summarize(avg_change = mean(percentChange2019to2022, na.rm = TRUE)) %>%
+  arrange(desc(avg_change))
+
+# Coloring Missouri.
+avg_percent_change <- avg_percent_change %>%
+  mutate(color = ifelse(State == "WI", "salmon", "gray"))
+
+# Plotting average percent change by state.
+ggplot(avg_percent_change, aes(x = reorder(State, -avg_change), y = avg_change, 
+                               fill = color)) +
+  geom_bar(stat = "identity") +
+  geom_text(data = subset(avg_percent_change, State == "WI"),
+            aes(label = paste0(round(avg_change, 2), "%"), y = avg_change + 20),
+            color = "black", size = 4.5) +
+  labs(title = "Percent Change in Auto Thefts from 2019 to 2022 by State", 
+       x = "State",
+       y = "Percent Change") +
+  scale_fill_identity() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Pie Chart
+```{r, include=TRUE, message=FALSE}
+# Calculating the sums of Kia/Hyundai thefts and other thefts grouped by Year.
+totals_by_year <- NationalData %>%
+  group_by(Year) %>%
+  summarise(
+    KiaHyundaiThefts = sum(KiaHyundaiThefts, na.rm = TRUE),
+    OtherThefts = sum(OtherThefts, na.rm = TRUE)
+  )
+
+# Display the calculated totals
+print(totals_by_year)
+
+# Ensure KiaHyundaiThefts and OtherThefts are numeric
+totals_by_year <- totals_by_year %>%
+  mutate(KiaHyundaiThefts = as.numeric(KiaHyundaiThefts),
+         OtherThefts = as.numeric(OtherThefts))
+
+# Transform data for pie charts
+totals_long <- totals_by_year %>%
+  pivot_longer(cols = c(KiaHyundaiThefts, OtherThefts),
+               names_to = "TheftType",
+               values_to = "Count")
+
+# Create pie charts using ggplot2
+ggplot(totals_long, aes(x = "", y = Count, fill = TheftType)) +
+  geom_col(width = 1) +                      
+  coord_polar(theta = "y") +                 
+  facet_wrap(~ Year, scales = "free") +      
+  theme_void() +                             
+  theme(legend.position = "bottom",
+        strip.text = element_text(size = 14),
+        plot.title = element_text(size = 18, hjust = 0.5)) +        
+  labs(fill = "Theft Type", title = "Rise in Kia & Hyundai Thefts by Year") +
+  scale_fill_manual(values = c("KiaHyundaiThefts" = "salmon", "OtherThefts" = "gray"),
+                    labels = c("KiaHyundaiThefts" = "Kia & Hyundai Thefts",
+                               "OtherThefts" = "Other Vehicle Thefts"))
+  theme(aspect.ratio = 1)
+```
+  
+## Stacked Bar Chart
+```{r, include=TRUE, message=FALSE}
+# Pulling Wisconsin data.
+WIdata <- NationalData %>%
+  filter(State == "WI") %>%
+  group_by(City) %>%
+  summarize(
+    KiaHyundai = sum(KiaHyundaiThefts, na.rm = TRUE),
+    Other = sum(OtherThefts, na.rm = TRUE)
+  )
+WIdata
+
+# Converting to long format.
+WIdata <- WIdata %>%
+  pivot_longer(cols = c(KiaHyundai, Other),
+               names_to = "VehicleType",
+               values_to = "TheftCount")
+
+# Plotting stacked bar chart.
+ggplot(WIdata, aes(x = City, y = TheftCount, fill = VehicleType)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = c("KiaHyundai" = "salmon",
+                               "Other" = "gray"),
+                    labels = c("KiaHyundai" = "Kia & Hyundai Thefts",
+                              "Other" = "Other Vehicle Thefts")) +
+  labs(title = "Wisconsin Car Thefts by City",
+       x = "City",
+       y = "Number of Thefts",
+       fill = "Vehicle Type") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+        axis.text.y = element_text(size = 12),
+        plot.title = element_text(size = 14, face = "bold"),
+        legend.title = element_text(size = 12),  
+        legend.text = element_text(size = 10),  
+        legend.position = c(0.15, 0.8))
+```
+
+## Area Chart
+```{r, include=TRUE, message=FALSE}
+ggplot(MilwaukeeData) +
+  geom_area(aes(x = Date, y = KiaHyundaiThefts, fill = "Kia/Hyundai Thefts"), 
+            alpha = 0.9) +
+  geom_area(aes(x = Date, y = OtherThefts, fill = "Other Thefts"), alpha = 0.8) +
+  labs(title = "Car Thefts in Milwaukee Over Time", 
+       x = "Date", 
+       y = "Number of Thefts", 
+       fill = "Vehicle Type") +  # Add a label for the fill legend
+  scale_fill_manual(values = c("Kia/Hyundai Thefts" = "salmon", 
+                               "Other Thefts" = "gray")) +  # Specify fill colors
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+        axis.text.y = element_text(size = 12),  
+        plot.title = element_text(size = 14, face = "bold"),  
+        legend.title = element_text(size = 12),  
+        legend.text = element_text(size = 10),  
+        legend.position = "top") +  
+  guides(fill = guide_legend(title.position = "top", title.hjust = 0.5))
+```
